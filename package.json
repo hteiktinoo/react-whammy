@@ -1,0 +1,24 @@
+{
+  "name": "react-whammy",
+  "version": "1.0.0",
+  "description": "A React Component For Real-time Javascript WebM Video Encoder",
+  "main": "whammy.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hteiktinoo/react-whammy.git"
+  },
+  "keywords": [
+    "react-whammy",
+    "js webm encoder",
+    "whammyjs"
+  ],
+  "author": "Hteik Tin Oo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/hteiktinoo/react-whammy/issues"
+  },
+  "homepage": "https://github.com/hteiktinoo/react-whammy#readme"
+}
