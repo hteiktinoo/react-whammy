@@ -1,10 +1,12 @@
 /*
-	var vid = new Whammy.Video();
+	var vid = new Whammy.Video(fps);
 	vid.add(canvas or data url)
-	vid.compile()
+	vid.compile(false, (output) => {
+		let url = URL.createObjectURL(output)
+  })
 */
 
-window.Whammy = (function(){
+export default (function(){
 	// in this case, frames has a very specific meaning, which will be
 	// detailed once i finish writing the code
 
@@ -84,7 +86,7 @@ window.Whammy = (function(){
 									},
 									{
 										"data": 1,
-										"id": 0x63c5 // TrackUID
+										"id": 0x73c5 // TrackUID
 									},
 									{
 										"data": 0,
@@ -123,6 +125,12 @@ window.Whammy = (function(){
 							}
 						]
 					},
+					{
+						"id": 0x1c53bb6b, // Cues
+						"data": [
+							//cue insertion point
+						]
+					}
 
 					//cluster insertion point
 				]
@@ -130,10 +138,39 @@ window.Whammy = (function(){
 		 ];
 
 
+		var segment = EBML[1];
+		var cues = segment.data[2];
+
 		//Generate clusters (max duration)
 		var frameNumber = 0;
 		var clusterTimecode = 0;
 		while(frameNumber < frames.length){
+
+			var cuePoint = {
+					"id": 0xbb, // CuePoint
+					"data": [
+						{
+							"data": Math.round(clusterTimecode),
+							"id": 0xb3 // CueTime
+						},
+						{
+							"id": 0xb7, // CueTrackPositions
+							"data": [
+								{
+									"data": 1,
+									"id": 0xf7 // CueTrack
+								},
+								{
+									"data": 0, // to be filled in when we know it
+									"size": 8,
+									"id": 0xf1 // CueClusterPosition
+								}
+							]
+						}
+					]
+				};
+
+			cues.data.push(cuePoint);
 
 			var clusterFrames = [];
 			var clusterDuration = 0;
@@ -154,7 +191,8 @@ window.Whammy = (function(){
 					].concat(clusterFrames.map(function(webp){
 						var block = makeSimpleBlock({
 							discardable: 0,
-							frame: webp.data.slice(4),
+							// frame: webp.data.slice(4),
+							frame: webp.data.slice(webp.data.indexOf('\x9d\x01\x2a') - 3),
 							invisible: 0,
 							keyframe: 1,
 							lacing: 0,
@@ -170,8 +208,22 @@ window.Whammy = (function(){
 				}
 
 			//Add cluster to segment
-			EBML[1].data.push(cluster);
+			segment.data.push(cluster);
 			clusterTimecode += clusterDuration;
+		}
+
+		//First pass to compute cluster positions
+		var position = 0;
+		for(var i = 0; i < segment.data.length; i++){
+			if (i >= 3) {
+				cues.data[i-3].data[1].data[1].data = position;
+			}
+			var data = generateEBML([segment.data[i]], outputAsArray);
+			position += data.size || data.byteLength || data.length;
+			if (i != 2) { // not cues
+				//Save results to avoid having to encode everything twice
+				segment.data[i] = data;
+			}
 		}
 
 		return generateEBML(EBML, outputAsArray)
@@ -206,6 +258,15 @@ window.Whammy = (function(){
 		return new Uint8Array(parts.reverse());
 	}
 
+	function numToFixedBuffer(num, size){
+		var parts = new Uint8Array(size);
+		for(var i = size - 1; i >= 0; i--){
+			parts[i] = num & 0xff;
+			num = num >> 8;
+		}
+		return parts;
+	}
+
 	function strToBuffer(str){
 		// return new Blob([str]);
 
@@ -238,9 +299,15 @@ window.Whammy = (function(){
 	function generateEBML(json, outputAsArray){
 		var ebml = [];
 		for(var i = 0; i < json.length; i++){
+			if (!('id' in json[i])){
+				//already encoded blob or byteArray
+				ebml.push(json[i]);
+				continue;
+			}
+
 			var data = json[i].data;
 			if(typeof data == 'object') data = generateEBML(data, outputAsArray);
-			if(typeof data == 'number') data = bitsToBuffer(data.toString(2));
+			if(typeof data == 'number') data = ('size' in json[i]) ? numToFixedBuffer(data, json[i].size) : bitsToBuffer(data.toString(2));
 			if(typeof data == 'string') data = strToBuffer(data);
 
 			if(data.length){
@@ -384,18 +451,23 @@ window.Whammy = (function(){
 
 		while (offset < string.length) {
 			var id = string.substr(offset, 4);
-			var len = parseInt(string.substr(offset + 4, 4).split('').map(function(i){
-				var unpadded = i.charCodeAt(0).toString(2);
-				return (new Array(8 - unpadded.length + 1)).join('0') + unpadded
-			}).join(''),2);
-			var data = string.substr(offset + 4 + 4, len);
-			offset += 4 + 4 + len;
 			chunks[id] = chunks[id] || [];
-
 			if (id == 'RIFF' || id == 'LIST') {
+				var len = parseInt(string.substr(offset + 4, 4).split('').map(function(i){
+					var unpadded = i.charCodeAt(0).toString(2);
+					return (new Array(8 - unpadded.length + 1)).join('0') + unpadded
+				}).join(''),2);
+				var data = string.substr(offset + 4 + 4, len);
+				offset += 4 + 4 + len;
 				chunks[id].push(parseRIFF(data));
+			} else if (id == 'WEBP') {
+				// Use (offset + 8) to skip past "VP8 "/"VP8L"/"VP8X" field after "WEBP"
+				chunks[id].push(string.substr(offset + 8));
+				offset = string.length;
 			} else {
-				chunks[id].push(data);
+				// Unknown chunk type; push entire payload
+				chunks[id].push(string.substr(offset + 4));
+				offset = string.length;
 			}
 		}
 		return chunks;
@@ -426,31 +498,68 @@ window.Whammy = (function(){
 
 	WhammyVideo.prototype.add = function(frame, duration){
 		if(typeof duration != 'undefined' && this.duration) throw "you can't pass a duration if the fps is set";
-		if(typeof duration == 'undefined' && !this.duration) throw "if you don't have the fps set, you ned to have durations here."
-		if('canvas' in frame){ //CanvasRenderingContext2D
+		if(typeof duration == 'undefined' && !this.duration) throw "if you don't have the fps set, you need to have durations here.";
+		if(frame.canvas){ //CanvasRenderingContext2D
 			frame = frame.canvas;
 		}
-		if('toDataURL' in frame){
-			frame = frame.toDataURL('image/webp', this.quality)
+		if(frame.toDataURL){
+			// frame = frame.toDataURL('image/webp', this.quality);
+			// quickly store image data so we don't block cpu. encode in compile method.
+			frame = frame.getContext('2d').getImageData(0, 0, frame.width, frame.height);
 		}else if(typeof frame != "string"){
 			throw "frame must be a a HTMLCanvasElement, a CanvasRenderingContext2D or a DataURI formatted string"
 		}
-		if (!(/^data:image\/webp;base64,/ig).test(frame)) {
+		if (typeof frame === "string" && !(/^data:image\/webp;base64,/ig).test(frame)) {
 			throw "Input must be formatted properly as a base64 encoded DataURI of type image/webp";
 		}
 		this.frames.push({
 			image: frame,
 			duration: duration || this.duration
-		})
-	}
+		});
+	};
 
-	WhammyVideo.prototype.compile = function(outputAsArray){
-		return new toWebM(this.frames.map(function(frame){
-			var webp = parseWebP(parseRIFF(atob(frame.image.slice(23))));
-			webp.duration = frame.duration;
-			return webp;
-		}), outputAsArray)
-	}
+	// deferred webp encoding. Draws image data to canvas, then encodes as dataUrl
+	WhammyVideo.prototype.encodeFrames = function(callback){
+
+		if(this.frames[0].image instanceof ImageData){
+
+			var frames = this.frames;
+			var tmpCanvas = document.createElement('canvas');
+			var tmpContext = tmpCanvas.getContext('2d');
+			tmpCanvas.width = this.frames[0].image.width;
+			tmpCanvas.height = this.frames[0].image.height;
+
+			var encodeFrame = function(index){
+				console.log('encodeFrame', index);
+				var frame = frames[index];
+				tmpContext.putImageData(frame.image, 0, 0);
+				frame.image = tmpCanvas.toDataURL('image/webp', this.quality);
+				if(index < frames.length-1){
+					setTimeout(function(){ encodeFrame(index + 1); }, 1);
+				}else{
+					callback();
+				}
+			}.bind(this);
+
+			encodeFrame(0);
+		}else{
+			callback();
+		}
+	};
+
+	WhammyVideo.prototype.compile = function(outputAsArray, callback){
+
+		this.encodeFrames(function(){
+
+			var webm = new toWebM(this.frames.map(function(frame){
+				var webp = parseWebP(parseRIFF(atob(frame.image.slice(23))));
+				webp.duration = frame.duration;
+				return webp;
+			}), outputAsArray);
+			callback(webm);
+
+		}.bind(this));
+	};
 
 	return {
 		Video: WhammyVideo,
@@ -464,4 +573,4 @@ window.Whammy = (function(){
 		toWebM: toWebM
 		// expose methods of madness
 	}
-})()
+})();
