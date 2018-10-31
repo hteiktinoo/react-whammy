@@ -7,9 +7,6 @@
 */
 
 export default (function(){
-	// in this case, frames has a very specific meaning, which will be
-	// detailed once i finish writing the code
-
 	function toWebM(frames, outputAsArray){
 		var info = checkFrames(frames);
 
