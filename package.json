@@ -1,6 +1,6 @@
 {
   "name": "react-whammy",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A React Component For Real-time Javascript WebM Video Encoder",
   "main": "whammy.js",
   "scripts": {
